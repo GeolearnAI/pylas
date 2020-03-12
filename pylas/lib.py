@@ -17,7 +17,7 @@ USE_UNPACKED = False
 logger = logging.getLogger(__name__)
 
 
-def open_las(source, closefd=True):
+def open_las(source, closefd=True, laz_backends=None):
     """ Opens and reads the header of the las content in the source
 
         >>> with open_las('pylastests/simple.las') as f:
@@ -63,10 +63,10 @@ def open_las(source, closefd=True):
         stream = io.BytesIO(source)
     else:
         stream = source
-    return LasReader(stream, closefd=closefd)
+    return LasReader(stream, closefd=closefd, laz_backends=laz_backends)
 
 
-def read_las(source, closefd=True):
+def read_las(source, closefd=True, laz_backends=None):
     """ Entry point for reading las data in pylas
 
     Reads the whole file into memory.
@@ -90,7 +90,7 @@ def read_las(source, closefd=True):
     pylas.lasdatas.base.LasBase
         The object you can interact with to get access to the LAS points & VLRs
     """
-    with open_las(source, closefd=closefd) as reader:
+    with open_las(source, closefd=closefd, laz_backends=laz_backends) as reader:
         return reader.read()
 
 

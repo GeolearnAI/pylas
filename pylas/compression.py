@@ -7,6 +7,7 @@ There are also functions to use Laszip (meant to be used as a fallback)
 import os
 import subprocess
 from enum import Enum, auto
+from functools import partial
 
 import numpy as np
 
@@ -22,6 +23,13 @@ try:
     # and ReadTheDocs uses 3.5
 except:
     HAS_LAZPERF = False
+
+
+class LazBackend(Enum):
+    Lazrs = auto()
+    LazrsSingleThreaded = auto()
+    Lazperf = auto()
+    Laszip = auto()
 
 
 def raise_if_no_lazperf():
@@ -49,7 +57,31 @@ def uncompressed_id_to_compressed(point_format_id):
     return (2 ** 7) | point_format_id
 
 
-def lazrs_decompress_buffer(compressed_buffer, point_size, point_count, laszip_vlr, parallel=True):
+def decompress_function_for_backend(laz_backend):
+    if laz_backend == LazBackend.Lazperf:
+        return lazperf_decompress_buffer
+    elif laz_backend == LazBackend.Lazrs:
+        return partial(lazrs_decompress_buffer, parallel=True)
+    elif laz_backend == LazBackend.LazrsSingleThreaded:
+        return partial(lazrs_decompress_buffer, parallel=False)
+    else:
+        raise ValueError(f"{laz_backend} not supported")
+
+
+def decompress_buffer(laz_backends, points_data, point_size, point_count, laszip_vlr_record_data):
+    ex = None
+    for laz_backend in laz_backends:
+        fn = decompress_function_for_backend(laz_backend)
+        try:
+            return fn(points_data, point_size, point_count, laszip_vlr_record_data)
+        except LazError as e:
+            print(e)
+            ex = e
+
+    if ex is not None:
+        raise ex
+
+def lazrs_decompress_buffer(compressed_buffer, point_size, point_count, laszip_vlr, parallel=False):
     try:
         import lazrs
     except Exception as e:
@@ -92,6 +124,7 @@ def lazrs_compress_points(points_data, parallel=True):
 def lazperf_decompress_buffer(compressed_buffer, point_size, point_count, laszip_vlr):
     raise_if_no_lazperf()
 
+    compressed_buffer = compressed_buffer[8:]
     try:
         point_compressed = np.frombuffer(compressed_buffer, dtype=np.uint8)
 
@@ -105,6 +138,7 @@ def lazperf_decompress_buffer(compressed_buffer, point_size, point_count, laszip
         return point_uncompressed
     except RuntimeError as e:
         raise LazError("lazperf error: {}".format(e))
+
 
 def lazperf_create_laz_vlr(points_record):
     raise_if_no_lazperf()
@@ -225,4 +259,3 @@ class LasZipProcess:
         self.stdin.close()
         self.prc.wait()
         self.raise_if_bad_err_code(self.prc.stderr.read().decode())
-

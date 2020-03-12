@@ -4,7 +4,8 @@ import os
 import struct
 
 from . import headers, errors, evlrs
-from .compression import lazrs_decompress_buffer, lazperf_decompress_buffer, LasZipProcess
+from .compression import LasZipProcess, LazBackend, \
+    decompress_buffer
 from .lasdatas import las14, las12
 from .point import record, PointFormat
 from .point.dims import size_of_point_format_id
@@ -32,12 +33,16 @@ class LasReader:
 
     """
 
-    def __init__(self, stream, closefd=True):
+    def __init__(self, stream, closefd=True, laz_backends=None):
         self.start_pos = stream.tell()
         _raise_if_wrong_file_signature(stream)
         self.stream = stream
         self.closefd = closefd
         self.header = self.read_header()
+        if laz_backends is None:
+            self.laz_backends = [LazBackend.Lazrs, LazBackend.Lazperf, LazBackend.Laszip]
+        else:
+            self.laz_backends = laz_backends
 
     def read_header(self):
         """ Reads the head of the las file and returns it
@@ -140,23 +145,13 @@ class LasReader:
         offset_to_chunk_table -= current_pos
         struct.pack_into("<q", points_data, 0, offset_to_chunk_table)
 
-        try:
-            decompressed_points = lazrs_decompress_buffer(
-                points_data,
-                point_format.dtype.itemsize,
-                self.header.point_count,
-                laszip_vlr
-            )
-        except errors.LazError as e:
-            logger.error("lazrs failed to decompress points: {}".format(e))
-            points_data = points_data[8:]
-
-            decompressed_points = lazperf_decompress_buffer(
-                points_data,
-                point_format.dtype.itemsize,
-                self.header.point_count,
-                laszip_vlr
-            )
+        decompressed_points = decompress_buffer(
+            self.laz_backends,
+            points_data,
+            point_format.dtype.itemsize,
+            self.header.point_count,
+            laszip_vlr
+        )
 
         points = record.PackedPointRecord.from_buffer(
             decompressed_points,
@@ -192,7 +187,6 @@ class LasReader:
             new_source = io.BytesIO(stdout_data)
 
         return new_source
-
 
     def _read_internal_waveform_packet(self):
         """ reads and returns the waveform vlr header, waveform record
