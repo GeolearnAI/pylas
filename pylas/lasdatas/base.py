@@ -10,8 +10,8 @@ from ..compression import (
     uncompressed_id_to_compressed,
     lazperf_compress_points,
     lazrs_compress_points,
-    LasZipProcess
-)
+    LasZipProcess,
+    compress_points)
 from ..point import record, dims, PointFormat
 from ..utils import ConveyorThread
 from ..vlrs import known, vlrlist
@@ -239,7 +239,7 @@ class LasBase(object):
             unique, counts = np.unique(self.return_number, return_counts=True)
             self.header.number_of_points_by_return = counts
 
-    def write_to(self, out_stream, do_compress=False):
+    def write_to(self, out_stream, do_compress=False, laz_backends=None):
         """ writes the data to a stream
 
         Parameters
@@ -264,15 +264,12 @@ class LasBase(object):
 
         if do_compress:
             try:
-                compressed_points_buf, vlr_data = lazrs_compress_points(self.points_data)
+                compressed_points_buf, vlr_data = compress_points(laz_backends, self.points_data)
             except errors.LazError as e:
-                try:
-                    logger.error("pylaz failed to compress: {}".format(e))
-                    compressed_points_buf, vlr_data = lazperf_compress_points(self.points_data)
-                except errors.LazError as e:
-                    logger.error("lazperf failed to compress: {}".format(e))
-                    self._compress_with_laszip_executable(out_stream)
-                    return
+                logger.error("lazperf failed to compress: {}".format(e))
+                self._compress_with_laszip_executable(out_stream)
+                return
+
             self.vlrs.append(known.LasZipVlr(vlr_data))
             raw_vlrs = vlrlist.RawVLRList.from_list(self.vlrs)
 
@@ -312,7 +309,7 @@ class LasBase(object):
                 )
             )
 
-    def write_to_file(self, filename, do_compress=None):
+    def write_to_file(self, filename, do_compress=None, laz_backends=None):
         """ Writes the las data into a file
 
         Parameters
@@ -328,9 +325,9 @@ class LasBase(object):
         if is_ext_laz and do_compress is None:
             do_compress = True
         with open(filename, mode="wb") as out:
-            self.write_to(out, do_compress=do_compress)
+            self.write_to(out, do_compress=do_compress, laz_backends=laz_backends)
 
-    def write(self, destination, do_compress=None):
+    def write(self, destination, do_compress=None, laz_backends=None):
         """ Writes to a stream or file
 
         When destination is a string, it will be interpreted as the path were the file should be written to,
@@ -365,7 +362,7 @@ class LasBase(object):
         else:
             if do_compress is None:
                 do_compress = False
-            self.write_to(destination, do_compress=do_compress)
+            self.write_to(destination, do_compress=do_compress, laz_backends=laz_backends)
 
     def _compress_with_laszip_executable(self, out_stream):
         try:

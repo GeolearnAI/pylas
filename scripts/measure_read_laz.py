@@ -1,8 +1,8 @@
 import io
 import logging
-import sys
 import time
 from pathlib import Path
+from argparse import ArgumentParser
 
 import matplotlib.pyplot as plt
 
@@ -14,10 +14,10 @@ logging.basicConfig(level=logging.DEBUG)
 LOAD_IN_MEM = True
 
 
-def main():
+def main(laz_dir):
     backends_to_use = [LazBackend.Lazperf, LazBackend.LazrsSingleThreaded, LazBackend.Lazrs]
     all_things = {}
-    all_files = list(Path(sys.argv[1]).glob("**/*.laz"))
+    all_files = list(Path(laz_dir).glob("**/*.laz"))
     for backend in backends_to_use:
         print(f"Using backend: {backend}")
         all_points = []
@@ -28,7 +28,6 @@ def main():
                     las_source = io.BytesIO(file.read())
             else:
                 las_source = open(str(path), mode="rb")
-            # las = pylas.read(str(path), laz_backends=[backend])
 
             start_time = time.time()
             las = pylas.read(las_source, laz_backends=[backend])
@@ -52,4 +51,11 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    parser = ArgumentParser(description="Runs the different LAZ backends on LAZ file for decompression "
+                                        "and plots the results")
+
+    parser.add_argument("laz_dir", help="All LAZ files in the directory or any of its sub directory will be used for"
+                                        "the  run")
+
+    args = parser.parse_args()
+    main(args.laz_dir)

@@ -10,7 +10,6 @@ import numpy as np
 
 from . import dims, packing
 from .. import errors
-from ..compression import lazperf_decompress_buffer
 from ..point import PointFormat
 
 logger = logging.getLogger(__name__)

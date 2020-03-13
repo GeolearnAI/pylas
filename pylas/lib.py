@@ -337,13 +337,13 @@ def merge_las(*las_files):
     return merged
 
 
-def write_then_read_again(las, do_compress=False):
+def write_then_read_again(las, do_compress=False, laz_backends=None):
     """ writes the given las into memory using BytesIO and 
     reads it again, returning the newly read file.
 
     Mostly used for testing purposes, without having to write to disk
     """
     out = io.BytesIO()
-    las.write(out, do_compress=do_compress)
+    las.write(out, do_compress=do_compress, laz_backends=laz_backends)
     out.seek(0)
     return read_las(out)

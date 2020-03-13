@@ -40,7 +40,7 @@ class LasReader:
         self.closefd = closefd
         self.header = self.read_header()
         if laz_backends is None:
-            self.laz_backends = [LazBackend.Lazrs, LazBackend.Lazperf, LazBackend.Laszip]
+            self.laz_backends = [LazBackend.Lazrs, LazBackend.Lazperf]
         else:
             self.laz_backends = laz_backends
 

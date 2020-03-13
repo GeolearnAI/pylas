@@ -4,14 +4,20 @@ when compression/decompression is actually needed
 
 There are also functions to use Laszip (meant to be used as a fallback)
 """
+import logging
 import os
 import subprocess
 from enum import Enum, auto
 from functools import partial
+from typing import Iterable, Tuple, Callable, Union, Optional
 
 import numpy as np
 
 from .errors import PylasError, LazError
+from .point.record import PackedPointRecord
+from .vlrs.known import LasZipVlr
+
+LOGGER = logging.getLogger(__name__)
 
 HAS_LAZPERF = False
 
@@ -29,7 +35,6 @@ class LazBackend(Enum):
     Lazrs = auto()
     LazrsSingleThreaded = auto()
     Lazperf = auto()
-    Laszip = auto()
 
 
 def raise_if_no_lazperf():
@@ -41,7 +46,7 @@ def raise_if_no_lazperf():
         )
 
 
-def is_point_format_compressed(point_format_id):
+def is_point_format_compressed(point_format_id: int) -> bool:
     compression_bit_7 = (point_format_id & 0x80) >> 7
     compression_bit_6 = (point_format_id & 0x40) >> 6
     if not compression_bit_6 and compression_bit_7:
@@ -49,15 +54,19 @@ def is_point_format_compressed(point_format_id):
     return False
 
 
-def compressed_id_to_uncompressed(point_format_id):
+def compressed_id_to_uncompressed(point_format_id: int) -> int:
     return point_format_id & 0x3f
 
 
-def uncompressed_id_to_compressed(point_format_id):
+def uncompressed_id_to_compressed(point_format_id: int) -> int:
     return (2 ** 7) | point_format_id
 
 
-def decompress_function_for_backend(laz_backend):
+# FIXME I feel like shouldn't need the Union[..., partial], because partial
+#   is a callable
+def decompress_function_for_backend(
+        laz_backend: LazBackend
+) -> Union[Callable[[bytes, int, int, LasZipVlr], Tuple[np.array, np.array]], partial]:
     if laz_backend == LazBackend.Lazperf:
         return lazperf_decompress_buffer
     elif laz_backend == LazBackend.Lazrs:
@@ -68,20 +77,67 @@ def decompress_function_for_backend(laz_backend):
         raise ValueError(f"{laz_backend} not supported")
 
 
-def decompress_buffer(laz_backends, points_data, point_size, point_count, laszip_vlr_record_data):
+def compress_function_for_backend(
+        laz_backend: LazBackend,
+) -> Union[Callable[[PackedPointRecord], Tuple[np.array, np.array]], partial]:
+    if laz_backend == LazBackend.Lazperf:
+        return lazperf_compress_points
+    elif laz_backend == LazBackend.Lazrs:
+        return partial(lazrs_compress_points, parallel=True)
+    elif laz_backend == LazBackend.LazrsSingleThreaded:
+        return partial(lazrs_compress_points, parallel=False)
+    else:
+        raise ValueError(f"{laz_backend} not supported")
+
+
+def decompress_buffer(
+        laz_backends: Iterable[LazBackend],
+        points_data: bytes,
+        point_size: int,
+        point_count: int,
+        laszip_vlr: LasZipVlr
+) -> Optional[np.array]:
+    # Empty laz_backends means maybe use laszip
     ex = None
     for laz_backend in laz_backends:
+        LOGGER.debug("Trying backend {}", laz_backend)
         fn = decompress_function_for_backend(laz_backend)
         try:
-            return fn(points_data, point_size, point_count, laszip_vlr_record_data)
+            return fn(points_data, point_size, point_count, laszip_vlr)
         except LazError as e:
-            print(e)
+            LOGGER.error("Laz backend '{}' failed with {}", laz_backend, e)
             ex = e
 
     if ex is not None:
         raise ex
+    else:
+        return None
 
-def lazrs_decompress_buffer(compressed_buffer, point_size, point_count, laszip_vlr, parallel=False):
+
+def compress_points(laz_backends: Iterable[LazBackend], points: PackedPointRecord) -> Tuple[np.array, np.array]:
+    # Empty laz_backends means maybe use laszip
+    ex = None
+    for laz_backend in laz_backends:
+        LOGGER.debug("Trying backend {}", laz_backend)
+        try:
+            return compress_function_for_backend(laz_backend)(points)
+        except LazError as e:
+            LOGGER.error("Laz backend '{}' failed with {}", laz_backend, e)
+            ex = e
+
+    if ex is not None:
+        raise ex
+    else:
+        return None
+
+
+def lazrs_decompress_buffer(
+        compressed_buffer: bytes,
+        point_size: int,
+        point_count: int,
+        laszip_vlr: LasZipVlr,
+        parallel: bool = False
+) -> np.array:
     try:
         import lazrs
     except Exception as e:
@@ -100,7 +156,10 @@ def lazrs_decompress_buffer(compressed_buffer, point_size, point_count, laszip_v
         return point_decompressed
 
 
-def lazrs_compress_points(points_data, parallel=True):
+def lazrs_compress_points(
+        points_data: PackedPointRecord,
+        parallel: bool = True
+) -> Tuple[np.array, np.array]:
     try:
         import lazrs
     except Exception as e:
@@ -121,7 +180,12 @@ def lazrs_compress_points(points_data, parallel=True):
         return compressed_data, vlr.record_data()
 
 
-def lazperf_decompress_buffer(compressed_buffer, point_size, point_count, laszip_vlr):
+def lazperf_decompress_buffer(
+        compressed_buffer: bytes,
+        point_size: int,
+        point_count: int,
+        laszip_vlr: LasZipVlr,
+) -> np.array:
     raise_if_no_lazperf()
 
     compressed_buffer = compressed_buffer[8:]
@@ -140,7 +204,7 @@ def lazperf_decompress_buffer(compressed_buffer, point_size, point_count, laszip
         raise LazError("lazperf error: {}".format(e))
 
 
-def lazperf_create_laz_vlr(points_record):
+def lazperf_create_laz_vlr(points_record: PackedPointRecord) -> lazperf.LazVLR:
     raise_if_no_lazperf()
     try:
         record_schema = lazperf.RecordSchema()
@@ -168,7 +232,7 @@ def lazperf_create_laz_vlr(points_record):
         raise LazError("lazperf error: {}".format(e))
 
 
-def lazperf_compress_points(points_data):
+def lazperf_compress_points(points_data: PackedPointRecord) -> Tuple[np.array, np.array]:
     try:
         laz_vrl = lazperf_create_laz_vlr(points_data)
 
@@ -182,7 +246,7 @@ def lazperf_compress_points(points_data):
         raise LazError("lazperf error: {}".format(e))
 
 
-def find_laszip_executable():
+def find_laszip_executable() -> str:
     laszip_names = ("laszip", "laszip.exe", "laszip-cli", "laszip-cli.exe")
 
     for binary in laszip_names:
